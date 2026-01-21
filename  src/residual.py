@@ -15,8 +15,7 @@ from sklearn.model_selection import KFold
 from sklearn.metrics import average_precision_score, mean_absolute_error
 from sklearn.preprocessing import RobustScaler
 
-from .utils.torch_utils import SimpleMLP, train_torch, predict_torch
-from .utils import save_json, log_print
+from .utils import SimpleMLP, train_torch, predict_torch, save_json, log_print
 from .embedding.cache_utils import embedding_cache_file
 
 

@@ -16,8 +16,7 @@ import catboost as cat
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import average_precision_score, roc_auc_score
 
-from .utils.torch_utils import SimpleMLP, train_torch, predict_torch
-from .utils import save_json, log_print, resolve_cfg_paths_abs, should_use_finetuned_t5
+from .utils import save_json, log_print, resolve_cfg_paths_abs, should_use_finetuned_t5, SimpleMLP, train_torch, predict_torch
 
 # T5 임베딩(LoRA / Base)
 from .embedding.t5_lora_embedding import build_t5_lora_embeddings
