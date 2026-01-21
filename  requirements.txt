@@ -10,3 +10,4 @@ lightgbm
 xgboost
 catboost
 pyyaml
+joblib

@@ -1,0 +1,47 @@
+experiment:
+  seeds: [3, 42, 80]
+  n_trials_s1: 10
+  n_trials_s2: 10
+  test_size: 0.2
+  s1_models: ["lgbm", "xgb", "cat"]
+  s2_models: ["mlp", "lgbm", "xgb", "cat"]
+  embedding_model: "t5-base"
+  text_column: "Review_Text"
+  label_column: "binary_helpfulness"
+  batch_size: 32
+
+data:
+  Amazon: "data/amazon/amazon.csv"
+  Hotel: "data/hotel/hotel.csv"
+  Coursera: "data/coursera/coursera.csv"
+  Audible: "data/audible/audible.csv"
+
+s1_features:
+  Amazon:
+    - "Deviation_Of_Star_Ratings"
+    - "Time_Lapsed"
+    - "Text_Length"
+    - "Title_Length"
+    - "Is_Photo"
+    - "Flesch_Reading_Ease"
+  Hotel:
+    - "Deviation_Of_Star_Ratings"
+    - "Time_Lapsed"
+    - "Text_Length"
+    - "Title_Length"
+    - "Is_Photo"
+    - "Flesch_Reading_Ease"
+  Coursera:
+    - "Deviation_Of_Star_Ratings"
+    - "Time_Lapsed"
+    - "Text_Length"
+    - "Flesch_Reading_Ease"
+  Audible:
+    - "Deviation_Of_Star_Ratings"
+    - "Time_Lapsed"
+    - "Text_Length"
+    - "Title_Length"
+    - "Flesch_Reading_Ease"
+
+output:
+  root_dir: "outputs/review_helpfulness_runner"
