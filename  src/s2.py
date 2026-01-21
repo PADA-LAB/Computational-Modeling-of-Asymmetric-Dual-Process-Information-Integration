@@ -1,4 +1,4 @@
-# review_helpfulness_runner/s2.py
+# src/s2.py
 from __future__ import annotations
 
 import gc
@@ -15,40 +15,105 @@ from pathlib import Path
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import average_precision_score, roc_auc_score
 
-from .torch_utils import SimpleMLP, train_torch, predict_torch
-from .utils import ensure_dir, save_json, log_print
+from src.torch_utils import SimpleMLP, train_torch, predict_torch
+from src.utils import save_json, log_print, resolve_cfg_paths_abs, should_use_finetuned_t5
 
-# ✅ 네 embedding_utils.py 그대로 가져와 쓰는 방식
-# (runner 폴더 안에 embedding_utils를 만들지 않으려면, import 경로만 맞춰주면 됨)
-# repo 구조가 repo/src/embedding/embedding_utils.py 라고 했으니:
+# sentence-transformers 대비용(옵션)
 from src.embedding.embedding_utils import get_embeddings
 
+# T5 임베딩(LoRA / Base)
+from src.embedding.t5_lora_embedding import build_t5_lora_embeddings
+from src.embedding.t5_base_embedding import build_t5_base_embeddings
 
-def _embedding_cache_path(out_dir: Path, embedding_model: str) -> Path:
-    safe_name = embedding_model.replace("/", "__")
-    return ensure_dir(out_dir / "embeddings_cache" / safe_name)
+# 공통 캐시
+from src.embedding.cache_utils import embedding_cache_file
 
 
 def load_or_make_full_embeddings(
+    *,
     texts: list[str],
-    embedding_model: str,
+    cfg: dict,
+    platform: str,
     device: torch.device,
     batch_size: int,
-    cache_dir: Path,
+    platform_out_dir: Path,
 ) -> np.ndarray:
-    """
-    full embeddings를 1번 만들고 cache_dir/X_all.npy 로 저장해서 재사용
-    """
-    cache_path = cache_dir / "X_all.npy"
-    if cache_path.exists():
-        return np.load(cache_path)
+    cache_path = embedding_cache_file(platform_out_dir, cfg)
 
-    X_all = get_embeddings(texts, embedding_model, device=device, batch_size=batch_size)
+    if cache_path.exists():
+        X_all = np.load(cache_path, allow_pickle=False)
+        if X_all.shape[0] != len(texts):
+            raise ValueError(
+                f"[S2] Embedding cache row mismatch.\n"
+                f" - cache rows: {X_all.shape[0]}\n"
+                f" - texts rows: {len(texts)}\n"
+                f"cache: {cache_path}\n"
+                f"다른 데이터로 생성된 캐시일 수 있어. 캐시 삭제 후 재실행."
+            )
+        return X_all
+
+    emb = cfg.get("embedding", {}) or {}
+    mode = emb.get("mode", "t5")
+
+    # project_root 기준으로 paths 절대화
+    project_root = Path(cfg["_project_root"]).resolve()
+    paths_abs = resolve_cfg_paths_abs(cfg, project_root)
+
+    # 캐시 저장 폴더 = cache_path.parent (cache_utils 규칙과 동일)
+    out_dir = cache_path.parent
+
+    if mode == "sentence_transformer":
+        model_name = emb.get("model_name")
+        if not model_name:
+            raise ValueError("embedding.mode=sentence_transformer 인데 embedding.model_name이 비어있어.")
+        X_all = get_embeddings(texts, model_name, device=device, batch_size=batch_size)
+
+    else:
+        # default: T5 encoder 임베딩 (pretrain = base_model_name)
+        base_model_name = emb.get("base_model_name", "t5-base")
+        max_length = emb.get("max_length", 256)
+        pool = emb.get("pool", "mean")
+
+        if should_use_finetuned_t5(cfg):
+            lora_model_dir = Path(paths_abs["finetune_model_dir"]) / platform
+            if not lora_model_dir.exists():
+                raise FileNotFoundError(
+                    f"[S2] LoRA adapter dir not found: {lora_model_dir}\n"
+                    f"runner가 플랫폼 시작 시 finetune을 수행하도록 되어 있어야 합니다."
+                )
+
+            X_all = build_t5_lora_embeddings(
+                texts=texts,
+                base_model_name=base_model_name,
+                lora_dir=lora_model_dir,
+                out_dir=out_dir,
+                max_length=max_length,
+                batch_size=batch_size,
+                pool=pool,
+                device=device,
+            )
+        else:
+            X_all = build_t5_base_embeddings(
+                texts=texts,
+                base_model_name=base_model_name,
+                out_dir=out_dir,
+                max_length=max_length,
+                batch_size=batch_size,
+                pool=pool,
+                device=device,
+            )
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    X_all = X_all.astype(np.float32)
     np.save(cache_path, X_all)
+    log_print(f"[S2] saved embedding cache: {cache_path} shape={X_all.shape}")
     return X_all
 
 
 def run_s2_train_and_save(
+    *,
+    cfg: dict,
+    platform: str,
     df: pd.DataFrame,
     text_col: str,
     y_col: str,
@@ -57,24 +122,24 @@ def run_s2_train_and_save(
     n_trials: int,
     seed_dir: Path,
     platform_out_dir: Path,
-    embedding_model: str,
     batch_size: int,
 ):
-    """
-    - seed_dir/train_idx.npy, test_idx.npy 를 이용해 slicing
-    - seed_dir/s2_preds_dict.pkl 저장
-    - seed_dir/S2_only_{model}_params.json 저장
-    """
-    tr_idx = np.load(seed_dir / "train_idx.npy")
-    te_idx = np.load(seed_dir / "test_idx.npy")
+    tr_idx = np.load(seed_dir / "train_idx.npy", allow_pickle=False)
+    te_idx = np.load(seed_dir / "test_idx.npy", allow_pickle=False)
 
     texts = df[text_col].astype(str).tolist()
     y_all = df[y_col].values.astype(int)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    cache_dir = _embedding_cache_path(platform_out_dir, embedding_model)
-    X_all = load_or_make_full_embeddings(texts, embedding_model, device, batch_size, cache_dir)
+    X_all = load_or_make_full_embeddings(
+        texts=texts,
+        cfg=cfg,
+        platform=platform,
+        device=device,
+        batch_size=batch_size,
+        platform_out_dir=platform_out_dir,
+    )
 
     X_tr = X_all[tr_idx]
     X_te = X_all[te_idx]
@@ -88,6 +153,10 @@ def run_s2_train_and_save(
         s2_preds = {"train": {}, "test": {}}
 
     optuna.logging.set_verbosity(optuna.logging.ERROR)
+
+    cache_path_str = str(embedding_cache_file(platform_out_dir, cfg))
+    finetune_enabled = bool((cfg.get("finetune", {}) or {}).get("enabled", False))
+    embedding_mode = (cfg.get("embedding", {}) or {}).get("mode", "t5")
 
     for s2_name in s2_models:
         if s2_name in s2_preds["test"]:
@@ -112,12 +181,18 @@ def run_s2_train_and_save(
             study = optuna.create_study(direction="maximize")
             study.optimize(obj_mlp, n_trials=n_trials)
 
-            best_info = {
-                "seed": seed, "model": s2_name,
-                "best_score": study.best_value, "best_params": study.best_params,
-                "embedding_model": embedding_model,
-            }
-            save_json(best_info, seed_dir / f"S2_only_{s2_name}_params.json")
+            save_json(
+                {
+                    "seed": seed,
+                    "model": s2_name,
+                    "best_score": study.best_value,
+                    "best_params": study.best_params,
+                    "embedding_cache_file": cache_path_str,
+                    "embedding_mode": embedding_mode,
+                    "finetune_enabled": finetune_enabled,
+                },
+                seed_dir / f"S2_only_{s2_name}_params.json",
+            )
 
             bp = study.best_params
             final_model = SimpleMLP(X_tr.shape[1], bp["nl"], bp["nu"], bp["do"])
@@ -149,12 +224,18 @@ def run_s2_train_and_save(
             study = optuna.create_study(direction="maximize")
             study.optimize(obj_tree, n_trials=n_trials)
 
-            best_info = {
-                "seed": seed, "model": s2_name,
-                "best_score": study.best_value, "best_params": study.best_params,
-                "embedding_model": embedding_model,
-            }
-            save_json(best_info, seed_dir / f"S2_only_{s2_name}_params.json")
+            save_json(
+                {
+                    "seed": seed,
+                    "model": s2_name,
+                    "best_score": study.best_value,
+                    "best_params": study.best_params,
+                    "embedding_cache_file": cache_path_str,
+                    "embedding_mode": embedding_mode,
+                    "finetune_enabled": finetune_enabled,
+                },
+                seed_dir / f"S2_only_{s2_name}_params.json",
+            )
 
             bp = study.best_params
             if s2_name == "lgbm":

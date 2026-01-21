@@ -2,46 +2,59 @@ experiment:
   seeds: [3, 42, 80]
   n_trials_s1: 10
   n_trials_s2: 10
-  test_size: 0.2
   s1_models: ["lgbm", "xgb", "cat"]
   s2_models: ["mlp", "lgbm", "xgb", "cat"]
-  embedding_model: "t5-base"
-  text_column: "Review_Text"
-  label_column: "binary_helpfulness"
-  batch_size: 32
-
-data:
-  Amazon: "data/amazon/amazon.csv"
-  Hotel: "data/hotel/hotel.csv"
-  Coursera: "data/coursera/coursera.csv"
-  Audible: "data/audible/audible.csv"
+  resid_s1_models: ["lgbm", "xgb", "cat"]
+  resid_s2_models: ["mlp", "lgbm", "xgb", "cat"]
+  embedding_batch_size: 32
 
 s1_features:
-  Amazon:
-    - "Deviation_Of_Star_Ratings"
-    - "Time_Lapsed"
-    - "Text_Length"
-    - "Title_Length"
-    - "Is_Photo"
-    - "Flesch_Reading_Ease"
-  Hotel:
-    - "Deviation_Of_Star_Ratings"
-    - "Time_Lapsed"
-    - "Text_Length"
-    - "Title_Length"
-    - "Is_Photo"
-    - "Flesch_Reading_Ease"
-  Coursera:
-    - "Deviation_Of_Star_Ratings"
-    - "Time_Lapsed"
-    - "Text_Length"
-    - "Flesch_Reading_Ease"
-  Audible:
-    - "Deviation_Of_Star_Ratings"
-    - "Time_Lapsed"
-    - "Text_Length"
-    - "Title_Length"
-    - "Flesch_Reading_Ease"
+  default: ["Deviation_Of_Star_Ratings","Time_Lapsed","Text_Length","Flesch_Reading_Ease"]
+  Amazon:  ["Deviation_Of_Star_Ratings","Time_Lapsed","Text_Length","Title_Length","Is_Photo","Flesch_Reading_Ease"]
+  Coursera: ["Deviation_Of_Star_Ratings","Time_Lapsed","Text_Length","Flesch_Reading_Ease"]
+  Audible: ["Deviation_Of_Star_Ratings","Time_Lapsed","Text_Length","Title_Length","Flesch_Reading_Ease"]
+  Hotel:   ["Deviation_Of_Star_Ratings","Time_Lapsed","Text_Length","Title_Length","Is_Photo","Flesch_Reading_Ease"]
 
-output:
-  root_dir: "outputs/review_helpfulness_runner"
+columns:
+  text: "Review_Text"
+  label: "binary_helpfulness"
+
+paths:
+  data:
+    Amazon: "data/amazon/amazon.csv"
+    Coursera: "data/coursera/coursera.csv"
+    Audible: "data/audible/audible.csv"
+    Hotel: "data/hotel/hotel.csv"
+  outputs_root: "outputs"
+  finetune_ckpt_dir: "outputs/checkpoints"
+  finetune_model_dir: "outputs/finetuned_model"
+
+embedding:
+  # 기본은 T5 encoder 임베딩을 쓴다 (pretrain = t5-base 고정)
+  # mode:
+  #  - "t5" : T5 encoder hidden state pooling 임베딩
+  #  - "sentence_transformer": sentence-transformers 계열(대비용/추후 교체용)
+  mode: "t5"
+  base_model_name: "t5-base"
+  max_length: 256
+  pool: "mean"        # "mean" | "cls"
+  batch_size: 32
+
+  # (선택) mode=sentence_transformer일 때만 사용
+  model_name: "sentence-transformers/all-MiniLM-L6-v2"
+
+finetune:
+  enabled: true       # true면 LoRA adapter 학습/로딩해서 임베딩 생성
+  model_name: "t5-base"
+  max_length: 256
+  target_seed_for_t5: 42
+  lora:
+    r: 8
+    alpha: 32
+    dropout: 0.1
+  train:
+    epochs: 10
+    lr: 1e-4
+    per_device_train_batch_size: 16
+    per_device_eval_batch_size: 16
+    weight_decay: 0.01

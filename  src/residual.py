@@ -1,4 +1,4 @@
-# review_helpfulness_runner/residual.py
+# src/residual.py
 from __future__ import annotations
 
 import numpy as np
@@ -17,11 +17,31 @@ from sklearn.preprocessing import RobustScaler
 
 from .torch_utils import SimpleMLP, train_torch, predict_torch
 from .utils import save_json, log_print
+from .embedding.cache_utils import embedding_cache_file
 
-from src.embedding.embedding_utils import get_embeddings
+
+def _load_s2_cached_embeddings(*, platform_out_dir: Path, cfg: dict, expected_rows: int) -> np.ndarray:
+    cache_path = embedding_cache_file(platform_out_dir, cfg)
+    if not cache_path.exists():
+        raise FileNotFoundError(
+            f"[Residual] S2 embedding cache not found: {cache_path}\n"
+            f"S2를 먼저 실행해서 X_all.npy를 생성해야 합니다."
+        )
+
+    X = np.load(cache_path, allow_pickle=False)
+    if X.shape[0] != expected_rows:
+        raise ValueError(
+            f"[Residual] Embedding cache row mismatch:\n"
+            f" - cache rows: {X.shape[0]}\n"
+            f" - df rows   : {expected_rows}\n"
+            f"같은 df / 같은 순서로 만든 캐시인지 확인해줘."
+        )
+    return X
 
 
 def run_residual_both_directions(
+    *,
+    cfg: dict,
     df: pd.DataFrame,
     s1_feature_cols: list[str],
     text_col: str,
@@ -29,11 +49,9 @@ def run_residual_both_directions(
     seed: int,
     seed_dir: Path,
     platform_out_dir: Path,
-    embedding_model: str,
-    batch_size: int,
     n_trials: int,
-    s1_models: list[str],      # ["lgbm","xgb","cat"]
-    resid_s2_models: list[str] # ["mlp","lgbm","xgb","cat"]
+    s1_models: list[str],
+    resid_s2_models: list[str],
 ):
     tr_idx = np.load(seed_dir / "train_idx.npy")
     te_idx = np.load(seed_dir / "test_idx.npy")
@@ -41,8 +59,11 @@ def run_residual_both_directions(
     y_all = df[y_col].values.astype(int)
     y_tr, y_te = y_all[tr_idx], y_all[te_idx]
 
-    # S1 feature
-    X_s1_all = df[[c for c in s1_feature_cols if c in df.columns]].values
+    # early_fusion처럼 robust numeric 처리
+    use_cols = [c for c in s1_feature_cols if c in df.columns]
+    X_s1_all = df[use_cols].apply(pd.to_numeric, errors="coerce").values
+    X_s1_all = np.nan_to_num(X_s1_all, nan=0.0, posinf=0.0, neginf=0.0)
+
     X_s1_tr = X_s1_all[tr_idx]
     X_s1_te = X_s1_all[te_idx]
 
@@ -50,13 +71,12 @@ def run_residual_both_directions(
     X_s1_tr = scaler.fit_transform(X_s1_tr)
     X_s1_te = scaler.transform(X_s1_te)
 
-    # Embeddings
-    texts = df[text_col].astype(str).tolist()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    X_s2_all = get_embeddings(texts, embedding_model, device=device, batch_size=batch_size)
+    X_s2_all = _load_s2_cached_embeddings(platform_out_dir=platform_out_dir, cfg=cfg, expected_rows=len(df))
     X_s2_tr, X_s2_te = X_s2_all[tr_idx], X_s2_all[te_idx]
 
-    # ---------- Forward Residual (S1 base pred -> S2 regressor predicts residual) ----------
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # ---------- Forward Residual ----------
     fwd_path = seed_dir / "residual_forward_preds.pkl"
     fwd_preds = joblib.load(fwd_path) if fwd_path.exists() else {}
 
@@ -70,9 +90,7 @@ def run_residual_both_directions(
         p_s1_te = pd.read_csv(s1_te_csv)["s1_pred_proba"].values
         y_resid = y_tr - p_s1_tr
 
-        if s1_name not in fwd_preds:
-            fwd_preds[s1_name] = {}
-
+        fwd_preds.setdefault(s1_name, {})
         for s2_reg in resid_s2_models:
             if s2_reg in fwd_preds[s1_name]:
                 continue
@@ -100,7 +118,7 @@ def run_residual_both_directions(
                 save_json(
                     {"seed": seed, "model": f"Residual_Fwd_{s1_name}_to_{s2_reg}",
                      "best_score": study.best_value, "best_params": study.best_params,
-                     "embedding_model": embedding_model},
+                     "embedding_key": cfg.get("embedding", {})},
                     seed_dir / f"Residual_Fwd_{s1_name}_to_{s2_reg}_params.json",
                 )
 
@@ -120,6 +138,7 @@ def run_residual_both_directions(
                         m = xgb.XGBRegressor(n_estimators=n_est, learning_rate=lr, verbosity=0, random_state=seed)
                     else:
                         m = cat.CatBoostRegressor(iterations=n_est, learning_rate=lr, verbose=False, random_seed=seed)
+
                     kf = KFold(n_splits=3, shuffle=True, random_state=seed)
                     maes = []
                     for t, v in kf.split(X_s2_tr):
@@ -134,7 +153,7 @@ def run_residual_both_directions(
                 save_json(
                     {"seed": seed, "model": f"Residual_Fwd_{s1_name}_to_{s2_reg}",
                      "best_score": study.best_value, "best_params": study.best_params,
-                     "embedding_model": embedding_model},
+                     "embedding_key": cfg.get("embedding", {})},
                     seed_dir / f"Residual_Fwd_{s1_name}_to_{s2_reg}_params.json",
                 )
 
@@ -157,8 +176,7 @@ def run_residual_both_directions(
             pr = average_precision_score(y_te, final_prob)
             log_print(f"[FwdResid] seed={seed} {s1_name}->{s2_reg} PR-AUC={pr:.4f}")
 
-    # ---------- Reverse Residual (S2 base pred -> S1 regressor predicts residual) ----------
-    # Reverse는 S2-only preds가 있어야 함
+    # ---------- Reverse Residual ----------
     rev_path = seed_dir / "residual_reverse_preds.pkl"
     s2_preds_path = seed_dir / "s2_preds_dict.pkl"
     if not s2_preds_path.exists():
@@ -201,7 +219,7 @@ def run_residual_both_directions(
             save_json(
                 {"seed": seed, "model": f"Residual_Rev_{s2_name}_to_{s1_reg}",
                  "best_score": study.best_value, "best_params": study.best_params,
-                 "embedding_model": embedding_model},
+                 "embedding_key": cfg.get("embedding", {})},
                 seed_dir / f"Residual_Rev_{s2_name}_to_{s1_reg}_params.json",
             )
 

@@ -1,4 +1,4 @@
-# review_helpfulness_runner/s1.py
+# src/s1.py
 from __future__ import annotations
 
 import numpy as np
@@ -24,23 +24,15 @@ def run_s1_train_and_save(
     n_trials: int,
     seed_dir: Path,
 ):
-    """
-    저장 구조:
-      seed_dir/
-        train_idx.npy
-        test_idx.npy
-        S1_lgbm/
-          best_params.json
-          s1_train_preds.csv
-          s1_pred_proba.csv
-        done_s1.flag
-    """
     ensure_dir(seed_dir)
 
     y_raw = df[y_col].values.astype(int)
-    X_raw = df[[c for c in s1_feature_cols if c in df.columns]].values
 
-    # split indices 저장
+    # early_fusion과 동일하게 robust하게 처리
+    use_cols = [c for c in s1_feature_cols if c in df.columns]
+    X_raw = df[use_cols].apply(pd.to_numeric, errors="coerce").values
+    X_raw = np.nan_to_num(X_raw, nan=0.0, posinf=0.0, neginf=0.0)
+
     indices = np.arange(len(df))
     tr_idx, te_idx = train_test_split(indices, test_size=0.2, random_state=seed, stratify=y_raw)
     np.save(seed_dir / "train_idx.npy", tr_idx)

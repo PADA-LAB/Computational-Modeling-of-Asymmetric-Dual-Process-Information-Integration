@@ -1,4 +1,4 @@
-# review_helpfulness_runner/torch_utils.py
+# src/torch_utils.py
 from __future__ import annotations
 
 import copy

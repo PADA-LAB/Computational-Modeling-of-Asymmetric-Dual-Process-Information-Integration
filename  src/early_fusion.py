@@ -1,4 +1,4 @@
-# review_helpfulness_runner/early_fusion.py
+# src/early_fusion.py
 from __future__ import annotations
 
 import numpy as np
@@ -15,10 +15,13 @@ from sklearn.metrics import average_precision_score, roc_auc_score
 from .torch_utils import SimpleMLP, train_torch, predict_torch
 from .utils import save_json, log_print
 
-from src.embedding.embedding_utils import get_embeddings
+# S2와 동일한 공통 캐시 파일을 로드
+from .embedding.cache_utils import embedding_cache_file
 
 
 def run_early_fusion(
+    *,
+    cfg: dict,
     df: pd.DataFrame,
     s1_feature_cols: list[str],
     text_col: str,
@@ -26,8 +29,6 @@ def run_early_fusion(
     seed: int,
     seed_dir: Path,
     platform_out_dir: Path,
-    embedding_model: str,
-    batch_size: int,
     n_trials: int,
 ):
     ef_path = seed_dir / "early_fusion_preds.pkl"
@@ -40,15 +41,35 @@ def run_early_fusion(
     y_all = df[y_col].values.astype(int)
     y_tr, y_te = y_all[tr_idx], y_all[te_idx]
 
-    X_s1 = df[[c for c in s1_feature_cols if c in df.columns]].values
+    # S1 feature: 안전하게 numeric으로 캐스팅 (혹시 문자열/결측 섞이면 NaN 생김)
+    use_cols = [c for c in s1_feature_cols if c in df.columns]
+    X_s1 = df[use_cols].apply(pd.to_numeric, errors="coerce").values
+    # NaN이 있으면 RobustScaler에 영향주므로 0으로 대체(혹은 median impute도 가능)
+    X_s1 = np.nan_to_num(X_s1, nan=0.0, posinf=0.0, neginf=0.0)
+
     X_s1_tr, X_s1_te = X_s1[tr_idx], X_s1[te_idx]
 
-    texts = df[text_col].astype(str).tolist()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # 임베딩은 cache를 s2.py에서 만들었을 수도 있지만, 여기서는 단순화를 위해 재생성/캐시 재사용을 원하면 s2.py 방식으로 합쳐도 됨
-    # (속도 중요하면 s2.py의 cache_dir/X_all.npy를 읽어오는 방식으로 바꾸면 됨)
-    X_s2_all = get_embeddings(texts, embedding_model, device=device, batch_size=batch_size)
+    # S2 cache 재사용 (finetune/t5_lora 포함 동일 임베딩 보장)
+    cache_path = embedding_cache_file(platform_out_dir, cfg)
+    if not cache_path.exists():
+        raise FileNotFoundError(
+            f"[EarlyFusion] Embedding cache not found: {cache_path}\n"
+            f"S2를 먼저 실행해서 X_all.npy 캐시를 만든 뒤 EarlyFusion을 실행해야 해."
+        )
+
+    X_s2_all = np.load(cache_path, allow_pickle=False)
+
+    # 캐시가 df와 같은 row-order/row-count인지 검증
+    if X_s2_all.shape[0] != len(df):
+        raise ValueError(
+            f"[EarlyFusion] Embedding cache row mismatch.\n"
+            f" - cache rows: {X_s2_all.shape[0]}\n"
+            f" - df rows   : {len(df)}\n"
+            f"같은 데이터/같은 전처리/같은 df 순서로 만든 캐시인지 확인해줘."
+        )
+
     X_s2_tr, X_s2_te = X_s2_all[tr_idx], X_s2_all[te_idx]
 
     scaler = RobustScaler()
@@ -76,8 +97,14 @@ def run_early_fusion(
     study.optimize(obj, n_trials=n_trials)
 
     save_json(
-        {"seed": seed, "model": "EarlyFusion_MLP", "best_score": study.best_value, "best_params": study.best_params,
-         "embedding_model": embedding_model},
+        {
+            "seed": seed,
+            "model": "EarlyFusion_MLP",
+            "best_score": study.best_value,
+            "best_params": study.best_params,
+            "embedding_cache_file": str(cache_path),
+            "finetune_enabled": bool((cfg.get("finetune", {}) or {}).get("enabled", False)),
+        },
         seed_dir / "EarlyFusion_MLP_params.json",
     )
 
