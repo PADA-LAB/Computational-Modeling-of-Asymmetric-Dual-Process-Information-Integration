@@ -4,9 +4,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from src.config import load_config, get_project_root
-from src.runner import run_platform_pipeline
-from src.utils import log_print
+from .config import load_config, get_project_root
+from .runner import run_platform_pipeline
+from .utils import log_print
 
 
 def main():

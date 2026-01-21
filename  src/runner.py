@@ -13,6 +13,7 @@ from .s1 import run_s1_train_and_save
 from .s2 import run_s2_train_and_save
 from .early_fusion import run_early_fusion
 from .residual import run_residual_both_directions
+from .late_fusion import run_late_fusion
 
 
 def run_platform_pipeline(*, cfg: dict, platform: str, project_root: Path):
@@ -150,6 +151,18 @@ def run_platform_pipeline(*, cfg: dict, platform: str, project_root: Path):
             n_trials=n_trials_s2,
             s1_models=resid_s1_models,
             resid_s2_models=resid_s2_models,
+        )
+        
+        # Step5: Late Fusion
+        run_late_fusion(
+            cfg=cfg,
+            df=df,
+            y_col=y_col,
+            seed=seed,
+            seed_dir=seed_dir,
+            platform_out_dir=platform_out_dir,
+            s1_models=s1_models,     # 또는 resid_s1_models 사용해도 됨
+            s2_models=s2_models,     # S2 결과 기준
         )
 
     log_print(f"[DONE] {platform}")

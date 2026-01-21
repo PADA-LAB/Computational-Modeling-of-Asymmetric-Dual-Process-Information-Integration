@@ -2,31 +2,29 @@
 from __future__ import annotations
 
 import gc
-import numpy as np
-import pandas as pd
-import optuna
+from pathlib import Path
+
 import joblib
+import numpy as np
+import optuna
+import pandas as pd
 import torch
 import lightgbm as lgb
 import xgboost as xgb
 import catboost as cat
 
-from pathlib import Path
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import average_precision_score, roc_auc_score
 
-from src.torch_utils import SimpleMLP, train_torch, predict_torch
-from src.utils import save_json, log_print, resolve_cfg_paths_abs, should_use_finetuned_t5
-
-# sentence-transformers 대비용(옵션)
-from src.embedding.embedding_utils import get_embeddings
+from .utils.torch_utils import SimpleMLP, train_torch, predict_torch
+from .utils import save_json, log_print, resolve_cfg_paths_abs, should_use_finetuned_t5
 
 # T5 임베딩(LoRA / Base)
-from src.embedding.t5_lora_embedding import build_t5_lora_embeddings
-from src.embedding.t5_base_embedding import build_t5_base_embeddings
+from .embedding.t5_lora_embedding import build_t5_lora_embeddings
+from .embedding.t5_base_embedding import build_t5_base_embeddings
 
 # 공통 캐시
-from src.embedding.cache_utils import embedding_cache_file
+from .embedding.cache_utils import embedding_cache_file
 
 
 def load_or_make_full_embeddings(
@@ -38,6 +36,11 @@ def load_or_make_full_embeddings(
     batch_size: int,
     platform_out_dir: Path,
 ) -> np.ndarray:
+    """
+    T5만 사용:
+    - finetune.enabled=True  -> LoRA adapter 적용한 T5 encoder 임베딩
+    - finetune.enabled=False -> base T5 encoder 임베딩
+    """
     cache_path = embedding_cache_file(platform_out_dir, cfg)
 
     if cache_path.exists():
@@ -52,9 +55,6 @@ def load_or_make_full_embeddings(
             )
         return X_all
 
-    emb = cfg.get("embedding", {}) or {}
-    mode = emb.get("mode", "t5")
-
     # project_root 기준으로 paths 절대화
     project_root = Path(cfg["_project_root"]).resolve()
     paths_abs = resolve_cfg_paths_abs(cfg, project_root)
@@ -62,46 +62,39 @@ def load_or_make_full_embeddings(
     # 캐시 저장 폴더 = cache_path.parent (cache_utils 규칙과 동일)
     out_dir = cache_path.parent
 
-    if mode == "sentence_transformer":
-        model_name = emb.get("model_name")
-        if not model_name:
-            raise ValueError("embedding.mode=sentence_transformer 인데 embedding.model_name이 비어있어.")
-        X_all = get_embeddings(texts, model_name, device=device, batch_size=batch_size)
+    emb = cfg.get("embedding", {}) or {}
+    base_model_name = emb.get("base_model_name", "t5-base")
+    max_length = emb.get("max_length", 256)
+    pool = emb.get("pool", "mean")
 
+    if should_use_finetuned_t5(cfg):
+        lora_model_dir = Path(paths_abs["finetune_model_dir"]) / platform
+        if not lora_model_dir.exists():
+            raise FileNotFoundError(
+                f"[S2] LoRA adapter dir not found: {lora_model_dir}\n"
+                f"runner가 플랫폼 시작 시 finetune을 수행하도록 되어 있어야 합니다."
+            )
+
+        X_all = build_t5_lora_embeddings(
+            texts=texts,
+            base_model_name=base_model_name,
+            lora_dir=lora_model_dir,
+            out_dir=out_dir,
+            max_length=max_length,
+            batch_size=batch_size,
+            pool=pool,
+            device=device,
+        )
     else:
-        # default: T5 encoder 임베딩 (pretrain = base_model_name)
-        base_model_name = emb.get("base_model_name", "t5-base")
-        max_length = emb.get("max_length", 256)
-        pool = emb.get("pool", "mean")
-
-        if should_use_finetuned_t5(cfg):
-            lora_model_dir = Path(paths_abs["finetune_model_dir"]) / platform
-            if not lora_model_dir.exists():
-                raise FileNotFoundError(
-                    f"[S2] LoRA adapter dir not found: {lora_model_dir}\n"
-                    f"runner가 플랫폼 시작 시 finetune을 수행하도록 되어 있어야 합니다."
-                )
-
-            X_all = build_t5_lora_embeddings(
-                texts=texts,
-                base_model_name=base_model_name,
-                lora_dir=lora_model_dir,
-                out_dir=out_dir,
-                max_length=max_length,
-                batch_size=batch_size,
-                pool=pool,
-                device=device,
-            )
-        else:
-            X_all = build_t5_base_embeddings(
-                texts=texts,
-                base_model_name=base_model_name,
-                out_dir=out_dir,
-                max_length=max_length,
-                batch_size=batch_size,
-                pool=pool,
-                device=device,
-            )
+        X_all = build_t5_base_embeddings(
+            texts=texts,
+            base_model_name=base_model_name,
+            out_dir=out_dir,
+            max_length=max_length,
+            batch_size=batch_size,
+            pool=pool,
+            device=device,
+        )
 
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     X_all = X_all.astype(np.float32)
@@ -156,7 +149,7 @@ def run_s2_train_and_save(
 
     cache_path_str = str(embedding_cache_file(platform_out_dir, cfg))
     finetune_enabled = bool((cfg.get("finetune", {}) or {}).get("enabled", False))
-    embedding_mode = (cfg.get("embedding", {}) or {}).get("mode", "t5")
+    embedding_mode = "t5"  # ✅ 고정
 
     for s2_name in s2_models:
         if s2_name in s2_preds["test"]:

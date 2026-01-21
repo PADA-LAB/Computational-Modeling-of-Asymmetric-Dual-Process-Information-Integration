@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict
 
-from src.utils import ensure_dir
+from ..utils import ensure_dir  # 상대 import로 통일
 
 
 def _safe(name: str) -> str:

@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from transformers import T5Tokenizer, T5ForConditionalGeneration
 
-from src.utils import ensure_dir, log_print
+from ..utils import ensure_dir, log_print  # 상대 import
 
 
 def _pool_hidden(hidden: torch.Tensor, attn_mask: torch.Tensor, pool: str) -> torch.Tensor:

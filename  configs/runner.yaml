@@ -33,15 +33,12 @@ embedding:
   # 기본은 T5 encoder 임베딩을 쓴다 (pretrain = t5-base 고정)
   # mode:
   #  - "t5" : T5 encoder hidden state pooling 임베딩
-  #  - "sentence_transformer": sentence-transformers 계열(대비용/추후 교체용)
   mode: "t5"
   base_model_name: "t5-base"
   max_length: 256
   pool: "mean"        # "mean" | "cls"
   batch_size: 32
 
-  # (선택) mode=sentence_transformer일 때만 사용
-  model_name: "sentence-transformers/all-MiniLM-L6-v2"
 
 finetune:
   enabled: true       # true면 LoRA adapter 학습/로딩해서 임베딩 생성
@@ -58,3 +55,7 @@ finetune:
     per_device_train_batch_size: 16
     per_device_eval_batch_size: 16
     weight_decay: 0.01
+
+late_fusion:
+  overwrite: false
+  weight_step: 0.05
