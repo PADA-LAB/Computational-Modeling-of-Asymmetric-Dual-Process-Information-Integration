@@ -17,13 +17,8 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import average_precision_score, roc_auc_score
 
 from .utils import save_json, log_print, resolve_cfg_paths_abs, should_use_finetuned_t5, SimpleMLP, train_torch, predict_torch
-
-# T5 임베딩(LoRA / Base)
-from .embedding.t5_lora_embedding import build_t5_lora_embeddings
-from .embedding.t5_base_embedding import build_t5_base_embeddings
-
-# 공통 캐시
-from .embedding.cache_utils import embedding_cache_file
+# T5 임베딩(LoRA / Base), 공통 캐시
+from .embedding import build_t5_lora_embeddings, build_t5_base_embeddings, embedding_cache_file
 
 
 def load_or_make_full_embeddings(

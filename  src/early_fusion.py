@@ -12,11 +12,9 @@ from sklearn.preprocessing import RobustScaler
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import average_precision_score, roc_auc_score
 
-from .utils.torch_utils import SimpleMLP, train_torch, predict_torch
-from .utils import save_json, log_print
-
+from .utils import SimpleMLP, train_torch, predict_torch, save_json, log_print
 # S2와 동일한 공통 캐시 파일을 로드
-from .embedding.cache_utils import embedding_cache_file
+from .embedding import embedding_cache_file
 
 
 def run_early_fusion(

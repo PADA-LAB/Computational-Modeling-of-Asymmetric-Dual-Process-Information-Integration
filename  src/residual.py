@@ -16,7 +16,7 @@ from sklearn.metrics import average_precision_score, mean_absolute_error
 from sklearn.preprocessing import RobustScaler
 
 from .utils import SimpleMLP, train_torch, predict_torch, save_json, log_print
-from .embedding.cache_utils import embedding_cache_file
+from .embedding import embedding_cache_file
 
 
 def _load_s2_cached_embeddings(*, platform_out_dir: Path, cfg: dict, expected_rows: int) -> np.ndarray:

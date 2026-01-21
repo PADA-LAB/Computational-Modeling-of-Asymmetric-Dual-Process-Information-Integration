@@ -11,3 +11,6 @@ xgboost
 catboost
 pyyaml
 joblib
+peft
+datasets
+accelerate 
