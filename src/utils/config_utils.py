@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Union
 import yaml
 
 
@@ -30,17 +30,36 @@ def get_s1_feature_cols(cfg: Dict[str, Any], platform: str) -> list[str]:
     raise KeyError("s1_features가 config에 없거나 default가 없습니다.")
 
 
-def resolve_cfg_paths_abs(cfg: Dict[str, Any], project_root: Path) -> Dict[str, str]:
+def resolve_cfg_paths_abs(cfg: Dict[str, Any], project_root: Path) -> Dict[str, Any]:
     """
-    cfg['paths'] 아래의 모든 상대경로를 project_root 기준 절대경로로 변환.
-    - paths에 어떤 키가 추가되어도 자동으로 변환됨
+    cfg['paths'] 아래의 상대경로를 project_root 기준 절대경로로 변환.
+    - 문자열 경로(str)는 abs path(str)로 변환
+    - dict/list처럼 중첩된 구조도 재귀적으로 처리 (플랫폼별 경로 등)
+    - 경로가 아닌 값은 그대로 둠
     """
     project_root = project_root.resolve()
     paths = cfg.get("paths", {}) or {}
 
-    out: Dict[str, str] = {}
+    def _resolve(value: Any) -> Any:
+        # string path -> absolute
+        if isinstance(value, str):
+            return str((project_root / value).resolve())
+
+        # dict -> recurse
+        if isinstance(value, dict):
+            return {kk: _resolve(vv) for kk, vv in value.items()}
+
+        # list -> recurse
+        if isinstance(value, list):
+            return [_resolve(x) for x in value]
+
+        # otherwise 그대로 반환
+        return value
+
+    out: Dict[str, Any] = {}
     for k, v in paths.items():
-        out[k] = str((project_root / v).resolve())
+        out[k] = _resolve(v)
+
     return out
 
 

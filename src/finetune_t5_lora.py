@@ -1,5 +1,4 @@
 # src/finetune_t5_lora.py
-# LoRA 어댑터를 학습해서 저장하는 코드
 from __future__ import annotations
 
 import gc
@@ -40,10 +39,10 @@ def run_lora_finetune(
     lora_alpha: int,
     lora_dropout: float,
     train_epochs: int,
-    lr: float,
+    lr,  
     per_device_train_bs: int,
     per_device_eval_bs: int,
-    weight_decay: float,
+    weight_decay,  
 ) -> Path:
     """
     returns: platform-specific LoRA adapter dir path
@@ -61,6 +60,37 @@ def run_lora_finetune(
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
+
+
+    # YAML에서 str로 들어오는 하이퍼파라미터 안전 변환
+    try:
+        lr = float(lr)
+    except Exception as e:
+        raise ValueError(f"[finetune.train.lr] must be float-like, got {lr} ({type(lr)})") from e
+
+    try:
+        weight_decay = float(weight_decay)
+    except Exception as e:
+        raise ValueError(f"[finetune.train.weight_decay] must be float-like, got {weight_decay} ({type(weight_decay)})") from e
+
+    try:
+        max_length = int(max_length)
+        train_epochs = int(train_epochs)
+        per_device_train_bs = int(per_device_train_bs)
+        per_device_eval_bs = int(per_device_eval_bs)
+    except Exception as e:
+        raise ValueError(
+            f"[finetune] int-like params invalid: "
+            f"max_length={max_length}, epochs={train_epochs}, "
+            f"train_bs={per_device_train_bs}, eval_bs={per_device_eval_bs}"
+        ) from e
+
+    log_print(
+        f"[LoRA cfg] lr={lr} ({type(lr).__name__}), "
+        f"weight_decay={weight_decay} ({type(weight_decay).__name__}), "
+        f"epochs={train_epochs}, max_length={max_length}, "
+        f"train_bs={per_device_train_bs}, eval_bs={per_device_eval_bs}"
+    )
 
     tokenizer = T5Tokenizer.from_pretrained(model_name)
 
@@ -95,11 +125,18 @@ def run_lora_finetune(
             truncation=True,
             padding="max_length",
         )
-        model_inputs["labels"] = labels["input_ids"]
+
+        # pad 토큰은 loss 계산에서 무시하도록 -100으로 변경
+        labels_ids = labels["input_ids"]
+        labels_ids = [
+            [(tid if tid != tokenizer.pad_token_id else -100) for tid in seq]
+            for seq in labels_ids
+        ]
+        model_inputs["labels"] = labels_ids
         return model_inputs
 
-    tokenized_train = train_ds.map(preprocess, batched=True)
-    tokenized_val = val_ds.map(preprocess, batched=True)
+    tokenized_train = train_ds.map(preprocess, batched=True, remove_columns=train_ds.column_names)
+    tokenized_val = val_ds.map(preprocess, batched=True, remove_columns=val_ds.column_names)
 
     base_model = T5ForConditionalGeneration.from_pretrained(model_name)
     peft_cfg = LoraConfig(
@@ -137,7 +174,6 @@ def run_lora_finetune(
         args=args,
         train_dataset=tokenized_train,
         eval_dataset=tokenized_val,
-        tokenizer=tokenizer,
         data_collator=DataCollatorForSeq2Seq(tokenizer, model=model),
     )
 
