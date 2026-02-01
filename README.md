@@ -46,7 +46,7 @@ outputs/
 ```
 ## Environment Setup
 
-The experiments were conducted using **Python 3.10+**.
+The experiments were conducted using **Python 3.10.13**.
 
 You can install the dependencies either in your local Python environment
 or inside a virtual environment.  For reproducibility and dependency isolation, **using a virtual environment is recommended**.
@@ -56,7 +56,7 @@ git clone https://github.com/PADA-LAB/Computational-Modeling-of-Asymmetric-Dual-
 cd Computational-Modeling-of-Asymmetric-Dual-Process-Information-Integration
 
 # (optional) create and activate virtual environment
-python3 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate   # Linux / macOS
 # .venv\Scripts\activate    # Windows
 
